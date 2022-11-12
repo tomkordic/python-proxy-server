@@ -220,7 +220,7 @@ class ProxyServer:
         raise error
       else:
         logi("connection closed", client=address)
-        # TODO close the source_conn
+        source_conn.close()
 
   def destination_response_processing(self, source_conn, dest_conn, address, destination):
     while True:
