@@ -41,6 +41,18 @@ python3 src/server.py
 ```
 docker run -p 8000:5000 -it python-proxy-server
 ```
+
+* Makefile
+
+Build the image first, need to execute only once.
+```
+make build
+```
+Run the server
+```
+make run
+```
+
 ## Screenshot
 <p align = "left">
 <img src= "assets/screenshot.png" alt ="screenshot" width="65%" height= "65%">
