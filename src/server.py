@@ -118,8 +118,8 @@ class ProxyServer:
     try:
       parser.get_headers()["host"]
     except:
-      ## TODO: return 400 Bad Request instead of exception
-      raise
+      self.serve_response(source_conn, address, 400, "BAD REQUEST")
+      return
       # pdb.set_trace()
     if self.is_proxy_request(parser):
       self.process_proxy_request(
