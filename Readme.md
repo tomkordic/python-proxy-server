@@ -36,12 +36,6 @@ Uses:
   python3 src/server.py
   ```
 
-* Container
-
-  ```
-  docker run -p 8000:8000 -it python-proxy-server
-  ```
-
 * Makefile
 
   Build the image first, need to execute only once.
