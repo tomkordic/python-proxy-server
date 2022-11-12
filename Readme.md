@@ -33,7 +33,7 @@ Uses:
 * Bare Metal
 
 ```
-python3 src/server.py --max_conn=10 --buffer_size=8192
+python3 src/server.py
 ```
 
 * Container

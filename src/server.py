@@ -1,4 +1,4 @@
-import pdb
+import os
 import argparse
 import logging
 import socket
@@ -10,27 +10,8 @@ from threading import Thread
 from datetime import date
 from pyparser import HttpParser, KIND_REQ
 
-parser = argparse.ArgumentParser()
 
-parser.add_argument('--http_port', help="Port to listen to, default 8000", default=8000, type=int)
-parser.add_argument('--max_conn', help="Maximum allowed connections, default 5", default=5, type=int)
-parser.add_argument('--buffer_size', help="Number of samples to be used, default 8192", default=8192, type=int)
-
-args = parser.parse_args()
-max_connection = args.max_conn
-buffer_size = args.buffer_size
-listening_port = args.http_port
-
-stream_handler = logging.StreamHandler()
-stream_handler.setLevel(logging.INFO)
-
-logging.basicConfig(level=logging.DEBUG,
-                    format='%(filename)s:%(lineno)s %(asctime)s %(levelname)s %(message)s',
-                    handlers=[logging.FileHandler("./logs/proxy-server.log", mode='w'),
-                              stream_handler])
-logger = logging.getLogger(__name__)
-
-k_jwt_secret = "a9ddbcaba8c0ac1a0a812dc0c2f08514b23f2db0a68343cb8199ebb38a6d91e4ebfb378e22ad39c2d01 d0b4ec9c34aa91056862ddace3fbbd6852ee60c36acbf"
+JWT_SECRET = "a9ddbcaba8c0ac1a0a812dc0c2f08514b23f2db0a68343cb8199ebb38a6d91e4ebfb378e22ad39c2d01 d0b4ec9c34aa91056862ddace3fbbd6852ee60c36acbf"
 
 DEFAULT_HTTP_PORT = 80
 
@@ -43,6 +24,7 @@ def logd(event, **kwargs):
 def log(log_level, event, **kwargs):
   for name, val in kwargs.items():
     event += " {}={}".format(name, val)
+  logger = logging.getLogger(__name__)
   logger.log(log_level, event)
 
 def get_utc():
@@ -78,12 +60,34 @@ def compose_request(parser):
   req += "\r\n"
   return str.encode(req)
 
+
 class ProxyServer:
-  def __init__(self, port):
+  def __init__(self, port, buffer_size, max_connections, log_dir, log_level):
+    self.log_path = os.path.join(log_dir, "proxy-server.log")
+    if not os.path.exists(log_dir):
+      os.makedirs(log_dir)
+    # Setup logger
+    stream_handler = logging.StreamHandler()
+    self.log_level = logging.INFO
+    if log_level == 0:
+      self.log_level = logging.DEBUG
+    elif log_level == 2:
+      self.log_level = logging.WARN
+    elif log_level == 3:
+      self.log_level = logging.ERROR
+    elif log_level == 4:
+      self.log_level = logging.CRITICAL
+    stream_handler.setLevel(self.log_level)
+    logging.basicConfig(level=self.log_level,
+                        format='%(filename)s:%(lineno)s %(asctime)s %(levelname)s %(message)s',
+                        handlers=[logging.FileHandler(self.log_path, mode='a'),
+                                  stream_handler])
+    logd("Log location", path=self.log_path, exists=os.path.exists(log_dir))
     self.server_socket = socket.socket()
     self.server_socket.bind(("0.0.0.0", port))
-    self.server_socket.listen(20)
+    self.server_socket.listen(max_connections)
     logi("server started", port=port)
+    self.buffer_size = buffer_size
 
   def accept_new_connections(self):
     while True:
@@ -99,7 +103,7 @@ class ProxyServer:
     request_headers_bytes = b''
     leftover = b''
     while parser.is_headers_complete() == False:
-      _chunk = source_conn.recv(16384)
+      _chunk = source_conn.recv(self.buffer_size)
       if len(_chunk) == 0:
         logd("End of request", client=address)
         return
@@ -165,7 +169,7 @@ class ProxyServer:
   def destination_response_processing(self, source_conn, dest_conn, address, destination):
     while True:
       logd("waiting for next chunk", _from=destination)
-      chunk = dest_conn.recv(16384)
+      chunk = dest_conn.recv(self.buffer_size)
       if len(chunk) == 0:
         dest_conn.close()
         source_conn.close() # remove in case of HTTP 1.1
@@ -186,14 +190,32 @@ class ProxyServer:
     token_payload = {"iat" : current_ts, "jti" : crypto_id, "payload": payload_data}
     # generate token
     token = jwt.encode(
-        payload=token_payload,
-        key=k_jwt_secret,
-        algorithm='HS512'
+        payload = token_payload,
+        key = JWT_SECRET,
+        algorithm = 'HS512'
     )
     logd("JWT token generated", token=token)
     parser.get_headers()["x-my-jwt"] = token
     
 
 if __name__== "__main__":
-  server = ProxyServer(listening_port)
+  parser = argparse.ArgumentParser()
+  parser.add_argument(
+      '--http_port', help="Port to listen to, default 8000", default=8000, type=int)
+  parser.add_argument(
+      '--max_conn', help="Maximum allowed connections, default 5", default=5, type=int)
+  parser.add_argument(
+      '--buffer_size', help="Number of samples to be used, default 8192", default=8192, type=int)
+  parser.add_argument(
+      '--log_dir', help="Path to the directory where the log files will be created, default ./log", default="./log", type=str)
+  parser.add_argument(
+      '--log_level', help="0 - DEBUG, 1 - INFO, 2 - WARN, 3 - ERROR, 4 FATAL , default INFO(1)", default=1, type=int)
+  args = parser.parse_args()
+  max_connection = args.max_conn
+  buffer_size = args.buffer_size
+  listening_port = args.http_port
+  log_dir= args.log_dir
+  log_level = args.log_level
+
+  server = ProxyServer(listening_port, buffer_size, max_connection, log_dir, log_level)
   server.accept_new_connections()

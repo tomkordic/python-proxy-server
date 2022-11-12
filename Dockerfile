@@ -6,12 +6,10 @@ WORKDIR /app
 
 COPY requirements.txt .
 
-ENV PORT=8000
-
 EXPOSE 8000
 
 RUN pip install -r requirements.txt
 
 COPY src/ .
 
-CMD [ "python", "./server.py", "--max_conn=10", "--buffer_size=8192"]
+CMD [ "python", "./server.py", "--http_port=8000", "--max_conn=10", "--buffer_size=8192" ]
