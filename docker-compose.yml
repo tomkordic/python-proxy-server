@@ -1,0 +1,10 @@
+version: "3"
+services:
+  proxy:
+    image: proxy-server
+    container_name: proxy
+    ports:
+      - "8000:8000"
+    build: .
+    labels:
+      - "Forward proxy server"
