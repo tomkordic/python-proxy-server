@@ -1,3 +1,6 @@
+import gevent
+import gevent.server
+import gevent.monkey
 import os
 import argparse
 import logging
@@ -7,6 +10,7 @@ import uuid
 import jwt
 import time
 from threading import Thread
+
 from datetime import date, datetime
 from pyparser import HttpParser, KIND_REQ
 from template import status_page_template, response_headers_template
@@ -63,7 +67,10 @@ def compose_request(parser):
 
 
 class ProxyServer:
-  def __init__(self, port, buffer_size, max_connections, log_dir, log_level):
+  def __init__(self, port, buffer_size, max_connections, log_dir, log_level, async_mode):
+    self.async_mode = async_mode
+    if self.async_mode:
+        gevent.monkey.patch_all()
     self.log_path = os.path.join(log_dir, "proxy-server.log")
     if not os.path.exists(log_dir):
       os.makedirs(log_dir)
@@ -96,11 +103,16 @@ class ProxyServer:
     while True:
       conn, address = self.server_socket.accept()
       logi("new connection", client=address)
-      t = Thread(target=self.process_connection, args=(conn, address))
-      t.setDaemon(True)
-      t.start()
+      if self.async_mode:
+        logd("spawning a gevent")
+        g = gevent.spawn(self.process_connection, conn, address)
+      else:
+        t = Thread(target=self.process_connection, args=(conn, address))
+        t.setDaemon(True)
+        t.start()
 
   def process_connection(self, source_conn, address):
+    logd("processing connection", address=address)
     parser = HttpParser(KIND_REQ)
     # Parse headers:
     request_headers_bytes = b''
@@ -201,9 +213,13 @@ class ProxyServer:
     send_all(dest_conn, leftover)
     logd("leftover sent ..", client=address, destination=destination)
     # Spawn destination_response_processing
-    t = Thread(target=self.destination_response_processing, args=(source_conn, dest_conn, address, destination))
-    t.setDaemon(True)
-    t.start()
+    if self.async_mode:
+      g = gevent.spawn(self.destination_response_processing,
+          source_conn, dest_conn, address, destination)
+    else:
+      t = Thread(target=self.destination_response_processing, args=(source_conn, dest_conn, address, destination))
+      t.setDaemon(True)
+      t.start()
     # Stream rest of the body to destination
     try:
       while True:
@@ -263,6 +279,8 @@ if __name__== "__main__":
   parser.add_argument(
       '--buffer_size', help="Number of samples to be used, default 8192", default=8192, type=int)
   parser.add_argument(
+      '--async_mode', help="0 - off(use threads instead), 1 - on, default 1(on) ", default=1, type=int)
+  parser.add_argument(
       '--log_dir', help="Path to the directory where the log files will be created, default ./log", default="./log", type=str)
   parser.add_argument(
       '--log_level', help="0 - DEBUG, 1 - INFO, 2 - WARN, 3 - ERROR, 4 FATAL , default INFO(1)", default=1, type=int)
@@ -272,6 +290,7 @@ if __name__== "__main__":
   listening_port = args.http_port
   log_dir= args.log_dir
   log_level = args.log_level
+  async_mode = args.async_mode
 
-  server = ProxyServer(listening_port, buffer_size, max_connection, log_dir, log_level)
+  server = ProxyServer(listening_port, buffer_size, max_connection, log_dir, log_level, async_mode)
   server.accept_new_connections()
