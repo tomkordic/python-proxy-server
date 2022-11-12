@@ -32,26 +32,26 @@ Uses:
 
 * Bare Metal
 
-```
-python3 src/server.py
-```
+  ```
+  python3 src/server.py
+  ```
 
 * Container
 
-```
-docker run -p 8000:5000 -it python-proxy-server
-```
+  ```
+  docker run -p 8000:8000 -it python-proxy-server
+  ```
 
 * Makefile
 
-Build the image first, need to execute only once.
-```
-make build
-```
-Run the server
-```
-make run
-```
+  Build the image first, need to execute only once.
+  ```
+  make build
+  ```
+  Run the server
+  ```
+  make run
+  ```
 
 ## Screenshot
 <p align = "left">
