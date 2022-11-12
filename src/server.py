@@ -7,8 +7,9 @@ import uuid
 import jwt
 import time
 from threading import Thread
-from datetime import date
+from datetime import date, datetime
 from pyparser import HttpParser, KIND_REQ
+from template import status_page_template, response_headers_template
 
 
 JWT_SECRET = "a9ddbcaba8c0ac1a0a812dc0c2f08514b23f2db0a68343cb8199ebb38a6d91e4ebfb378e22ad39c2d01 d0b4ec9c34aa91056862ddace3fbbd6852ee60c36acbf"
@@ -88,6 +89,8 @@ class ProxyServer:
     self.server_socket.listen(max_connections)
     logi("server started", port=port)
     self.buffer_size = buffer_size
+    self.start_time = get_utc()
+    self.number_of_requests = 0
 
   def accept_new_connections(self):
     while True:
@@ -112,16 +115,70 @@ class ProxyServer:
       consumed = parser.execute(chunk, len(chunk))
       leftover = chunk[consumed:]
       request_headers_bytes += chunk[:consumed]
-    # Connect to destination host
-    logd("request", bytes=request_headers_bytes)
-    dest_conn = socket.socket()
     try:
-      destination = parser.get_headers()["host"]
+      parser.get_headers()["host"]
     except:
       ## TODO: return 400 Bad Request instead of exception
       raise
       # pdb.set_trace()
+    if self.is_proxy_request(parser):
+      self.process_proxy_request(
+          source_conn, address, parser, request_headers_bytes, leftover)
+    else:
+      self.process_request(source_conn, address, parser,
+                           request_headers_bytes, leftover)
 
+  def is_proxy_request(self, parser):
+    for name, val in parser.get_headers().items():
+      if name.lower().startswith("proxy"):
+        return True
+    return False
+
+  def process_request(self, source_conn, address, parser, request_headers_bytes, leftover):
+    request_url = parser.get_url()
+    logi("Request received", url=request_url)
+    if request_url.find("?") != -1:
+      request_url = request_url.split("?")[0]
+    if request_url.lower() == "/status":
+      logi("serving status page")
+      self.serve_status_page(source_conn, address)
+    else:
+      self.serve_response(source_conn, address, 404, "NOT FOUND")
+
+  def serve_response(self, source_conn, address, status, status_message):
+    response_headers = response_headers_template.substitute({
+        "status_code": str(status),
+        "status_message": status_message,
+        "content_type": "TEXT/HTML",
+        "content_length": "0"})
+    logi("Serving response", address=address, status=status, status_message=status_message)
+    send_all(source_conn, response_headers.encode())
+    logi("Connection closed", address=address)
+
+  def serve_status_page(self, source_conn, address):
+    start_time = datetime.utcfromtimestamp(
+        self.start_time/1000).strftime("%d.%m.%Y %H:%M:%S")
+    response_body = status_page_template.substitute({
+      "number_of_requests": str(self.number_of_requests),
+      "start_date": start_time})
+    response_headers = response_headers_template.substitute({
+      "status_code": "200", 
+      "status_message":"OK",
+      "content_type":"TEXT/HTML",
+      "content_length": str(len(response_body))})
+    logd("serving status page", headers=response_headers, body=response_body)
+    send_all(source_conn, response_headers.encode())
+    send_all(source_conn, response_body.encode())
+    source_conn.close()
+    logi("Connection closed", address=address)
+
+  def process_proxy_request(
+          self, source_conn, address, parser, request_headers_bytes, leftover):
+    destination = parser.get_headers()["host"]
+    self.number_of_requests += 1
+    # Connect to destination host
+    logd("request", bytes=request_headers_bytes)
+    dest_conn = socket.socket()
     logd("Connecting", client=address, destination=destination)
     dest_conn.connect(split_address(destination))
     logi("Connected ..", client=address, destination=destination)
@@ -164,7 +221,6 @@ class ProxyServer:
       else:
         logi("connection closed", client=address)
         # TODO close the source_conn
-    
 
   def destination_response_processing(self, source_conn, dest_conn, address, destination):
     while True:
