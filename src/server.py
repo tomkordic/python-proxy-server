@@ -9,8 +9,8 @@ import errno
 import uuid
 import jwt
 import time
+import netifaces as ni
 from threading import Thread
-
 from datetime import date, datetime
 from pyparser import HttpParser, KIND_REQ
 from template import status_page_template, response_headers_template
@@ -27,6 +27,7 @@ def logd(event, **kwargs):
   log(logging.DEBUG, event, **kwargs)
 
 def log(log_level, event, **kwargs):
+  ## TODO fix line lumber log print
   for name, val in kwargs.items():
     event += " {}={}".format(name, val)
   logger = logging.getLogger(__name__)
@@ -74,7 +75,17 @@ class ProxyServer:
     self.log_path = os.path.join(log_dir, "proxy-server.log")
     if not os.path.exists(log_dir):
       os.makedirs(log_dir)
-    # Setup logger
+    self.setup_logging(log_level)
+    self.server_socket = socket.socket()
+    self.server_socket.bind(("0.0.0.0", port))
+    self.server_socket.listen(max_connections)
+    logi("server started", port=port)
+    self.buffer_size = buffer_size
+    self.start_time = get_utc()
+    self.number_of_requests = 0
+    self.ip_trickery()
+
+  def setup_logging(self, log_level):
     stream_handler = logging.StreamHandler()
     self.log_level = logging.INFO
     if log_level == 0:
@@ -91,20 +102,37 @@ class ProxyServer:
                         handlers=[logging.FileHandler(self.log_path, mode='a'),
                                   stream_handler])
     logd("Log location", path=self.log_path, exists=os.path.exists(log_dir))
-    self.server_socket = socket.socket()
-    self.server_socket.bind(("0.0.0.0", port))
-    self.server_socket.listen(max_connections)
-    logi("server started", port=port)
-    self.buffer_size = buffer_size
-    self.start_time = get_utc()
-    self.number_of_requests = 0
+
+  def ip_trickery(self):
+    ## requests lib uses SSL sockets so import only after we have done monkey patch.
+    from requests import get
+    from requests.exceptions import ConnectionError
+    # determine external ip.
+    try:
+      self.extern_ip = get('https://api.ipify.org').content.decode('utf8')
+      logd("External ip detected:", external_ip=self.extern_ip)
+    except ConnectionError as error:
+      logd("No internet connection, expecting only requests from the local network.")
+      self.extern_ip = "unknown"
+    ## get ip on every local interface
+    self.local_ips = ["0.0.0.0"]
+    for interface in ni.interfaces():
+      try:
+        ip = ni.ifaddresses(interface)[ni.AF_INET][0]['addr']
+        logd("Local address found", interface=interface, ip=ip)
+        self.local_ips.append(ip)
+      except ModuleNotFoundError as error:
+        logd("ModuleNotFoundError", interface=interface, error=str(error))
+      except ValueError as error:
+        logd("ValueError", interface=interface, error=str(error))
+      except KeyError:
+        logd("No IP", interface=interface)
 
   def accept_new_connections(self):
     while True:
       conn, address = self.server_socket.accept()
       logi("new connection", client=address)
       if self.async_mode:
-        logd("spawning a gevent")
         g = gevent.spawn(self.process_connection, conn, address)
       else:
         t = Thread(target=self.process_connection, args=(conn, address))
@@ -134,17 +162,27 @@ class ProxyServer:
       return
       # pdb.set_trace()
     if self.is_proxy_request(parser):
+      logi("Processing proxy request", address=address)
       self.process_proxy_request(
           source_conn, address, parser, request_headers_bytes, leftover)
     else:
+      logi("Processing non proxy request", address=address)
       self.process_request(source_conn, address, parser,
                            request_headers_bytes, leftover)
 
   def is_proxy_request(self, parser):
-    for name, val in parser.get_headers().items():
-      if name.lower().startswith("proxy"):
-        return True
-    return False
+    host = parser.get_headers()["host"]
+    host_match = False;
+    if host.lower().find(self.extern_ip) != -1:
+      host_match = True
+    for local_ip in self.local_ips:
+      if host.lower().find(local_ip) != -1:
+        host_match = True
+    ## TODO maybe include a header checkup also
+    # for name, val in parser.get_headers().items():
+    #   if name.lower().startswith("proxy"):
+    #     return True
+    return not host_match
 
   def process_request(self, source_conn, address, parser, request_headers_bytes, leftover):
     request_url = parser.get_url()

@@ -1,2 +1,4 @@
+requests
+netifaces
 pyjwt[crypto]
 gevent
