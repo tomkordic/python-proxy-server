@@ -3,38 +3,20 @@ import gevent.server
 import gevent.monkey
 import os
 import argparse
-import logging
 import socket
 import errno
 import uuid
 import jwt
-import time
 import netifaces as ni
-from threading import Thread
+from threading import Thread, Lock
 from datetime import date, datetime
 from pyparser import HttpParser, KIND_REQ
 from template import status_page_template, response_headers_template
+from utils import logd, logi, setup_logging, get_utc
+from constants import JWT_SECRET
 
-
-JWT_SECRET = "a9ddbcaba8c0ac1a0a812dc0c2f08514b23f2db0a68343cb8199ebb38a6d91e4ebfb378e22ad39c2d01 d0b4ec9c34aa91056862ddace3fbbd6852ee60c36acbf"
 
 DEFAULT_HTTP_PORT = 80
-
-def logi(event, **kwargs):
-  log(logging.INFO, event, **kwargs)
-
-def logd(event, **kwargs):
-  log(logging.DEBUG, event, **kwargs)
-
-def log(log_level, event, **kwargs):
-  ## TODO fix line lumber log print
-  for name, val in kwargs.items():
-    event += " {}={}".format(name, val)
-  logger = logging.getLogger(__name__)
-  logger.log(log_level, event)
-
-def get_utc():
-    return round(time.time() * 1000)
 
 def send_all(sock, bytes):
   while len(bytes) > 0:
@@ -72,10 +54,12 @@ class ProxyServer:
     self.async_mode = async_mode
     if self.async_mode:
         gevent.monkey.patch_all()
+    else:
+      self.lock = Lock()
     self.log_path = os.path.join(log_dir, "proxy-server.log")
     if not os.path.exists(log_dir):
       os.makedirs(log_dir)
-    self.setup_logging(log_level)
+    setup_logging(log_level, self.log_path, log_dir)
     self.server_socket = socket.socket()
     self.server_socket.bind(("0.0.0.0", port))
     self.server_socket.listen(max_connections)
@@ -84,24 +68,6 @@ class ProxyServer:
     self.start_time = get_utc()
     self.number_of_requests = 0
     self.ip_trickery()
-
-  def setup_logging(self, log_level):
-    stream_handler = logging.StreamHandler()
-    self.log_level = logging.INFO
-    if log_level == 0:
-      self.log_level = logging.DEBUG
-    elif log_level == 2:
-      self.log_level = logging.WARN
-    elif log_level == 3:
-      self.log_level = logging.ERROR
-    elif log_level == 4:
-      self.log_level = logging.CRITICAL
-    stream_handler.setLevel(self.log_level)
-    logging.basicConfig(level=self.log_level,
-                        format='%(filename)s:%(lineno)s %(asctime)s %(levelname)s %(message)s',
-                        handlers=[logging.FileHandler(self.log_path, mode='a'),
-                                  stream_handler])
-    logd("Log location", path=self.log_path, exists=os.path.exists(log_dir))
 
   def ip_trickery(self):
     ## requests lib uses SSL sockets so import only after we have done monkey patch.
@@ -127,6 +93,7 @@ class ProxyServer:
         logd("ValueError", interface=interface, error=str(error))
       except KeyError:
         logd("No IP", interface=interface)
+    logi("Interfaces", extern_ip=self.extern_ip, local_ips=self.local_ips)
 
   def accept_new_connections(self):
     while True:
@@ -160,18 +127,24 @@ class ProxyServer:
     except:
       self.serve_response(source_conn, address, 400, "BAD REQUEST")
       return
-      # pdb.set_trace()
+    ## TODO detect https request and send 406 not allowed
     if self.is_proxy_request(parser):
       logi("Processing proxy request", address=address)
       self.process_proxy_request(
           source_conn, address, parser, request_headers_bytes, leftover)
     else:
       logi("Processing non proxy request", address=address)
-      self.process_request(source_conn, address, parser,
-                           request_headers_bytes, leftover)
+      self.process_request(source_conn, address, parser)
 
   def is_proxy_request(self, parser):
     host = parser.get_headers()["host"]
+    # try to resolve the host name
+    try:
+      resolved_host_ip = socket.gethostbyname(host)
+      logi("Host name resolved", host=host, host_ip=resolved_host_ip)
+      host = resolved_host_ip
+    except:
+      logi("failed to resolve host", host=host)
     host_match = False;
     if host.lower().find(self.extern_ip) != -1:
       host_match = True
@@ -184,7 +157,7 @@ class ProxyServer:
     #     return True
     return not host_match
 
-  def process_request(self, source_conn, address, parser, request_headers_bytes, leftover):
+  def process_request(self, source_conn, address, parser):
     request_url = parser.get_url()
     logi("Request received", url=request_url)
     if request_url.find("?") != -1:
@@ -225,7 +198,12 @@ class ProxyServer:
   def process_proxy_request(
           self, source_conn, address, parser, request_headers_bytes, leftover):
     destination = parser.get_headers()["host"]
-    self.number_of_requests += 1
+    if not self.async_mode:
+      self.lock.acquire()
+      self.number_of_requests += 1
+      self.lock.release()
+    else:
+      self.number_of_requests += 1
     # Connect to destination host
     logd("request", bytes=request_headers_bytes)
     dest_conn = socket.socket()
@@ -291,13 +269,15 @@ class ProxyServer:
   def create_jwt_if_needed(self, parser):
     if (parser.get_method() != "POST"):
       return
-    current_ts = get_utc()
+    current_time_in_seconds = int(get_utc()/1000)
     crypto_id = str(uuid.uuid4())
     date_today = date.today().strftime("%d.%m.%Y")
     payload_data = {"user": "username",
                     "date": date_today}
-    logi("generating Json web token ...", iat=current_ts, jti=crypto_id, date=date_today)
-    token_payload = {"iat" : current_ts, "jti" : crypto_id, "payload": payload_data}
+    logi("generating Json web token ...",
+        iat=current_time_in_seconds, jti=crypto_id, date=date_today)
+    token_payload = {"iat": current_time_in_seconds,
+        "jti": crypto_id, "payload": payload_data}
     # generate token
     token = jwt.encode(
         payload = token_payload,
@@ -321,7 +301,7 @@ if __name__== "__main__":
   parser.add_argument(
       '--log_dir', help="Path to the directory where the log files will be created, default ./log", default="./log", type=str)
   parser.add_argument(
-      '--log_level', help="0 - DEBUG, 1 - INFO, 2 - WARN, 3 - ERROR, 4 FATAL , default INFO(1)", default=1, type=int)
+      '--log_level', help="0 - DEBUG, 1 - INFO, 2 - WARN, 3 - ERROR, 4 FATAL , default INFO(1)", default=0, type=int)
   args = parser.parse_args()
   max_connection = args.max_conn
   buffer_size = args.buffer_size
