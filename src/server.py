@@ -301,7 +301,7 @@ if __name__== "__main__":
   parser.add_argument(
       '--log_dir', help="Path to the directory where the log files will be created, default ./log", default="./log", type=str)
   parser.add_argument(
-      '--log_level', help="0 - DEBUG, 1 - INFO, 2 - WARN, 3 - ERROR, 4 FATAL , default INFO(1)", default=0, type=int)
+      '--log_level', help="0 - DEBUG, 1 - INFO, 2 - WARN, 3 - ERROR, 4 FATAL , default INFO(1)", default=1, type=int)
   args = parser.parse_args()
   max_connection = args.max_conn
   buffer_size = args.buffer_size
