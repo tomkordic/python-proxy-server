@@ -5,16 +5,12 @@ services:
     container_name: proxy
     ports:
       - "8000:8000"
-    # networks:
-    #   - local
     build: .
     labels:
       - "Forward proxy server"
   
   tests:
     image: proxy-server
-    # networks:
-    #   - local
     build: .
     depends_on:
       - proxy
@@ -25,7 +21,3 @@ services:
       - "Proxy server tests"
     command:
       python -m unittest discover -s tests/integration
-
-# networks:
-#     local:
-#         driver: bridge

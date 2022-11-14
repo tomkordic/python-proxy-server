@@ -20,6 +20,10 @@ Simple proxy server for HTTP, HTTPS will not work. Run server_ip:port/status to 
   ```
   make run
   ```
+  Run integration tests
+  ```
+  make test
+  ```
 
 ## Screenshot
 <p align = "left">
@@ -31,4 +35,9 @@ If running the proxy on your local machine with the above example, point your pr
 ```localhost 8000```
 
 Test access to a HTTP only webpage such as;
-```http://neverssl.com```
+```http://neverssl.com``` <br>
+and <br>
+```http://postman-echo.com```
+
+### Example:
+```curl -X GET 'http://postman-echo.com/get?foo1=bar1&foo2=bar2' -x localhost:8000```
