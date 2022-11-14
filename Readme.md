@@ -1,7 +1,6 @@
 # proxy server
 
-## Introduction
-Simple proxy server for HTTP, HTTPS will not work. Run server_ip:port/status to see status page, number of requests processed and server start time.
+Simple proxy server for HTTP, HTTPS will not work. Run server_ip:port/status to see status page, number of proxy requests processed and server start time.
 
 ## Run
 
